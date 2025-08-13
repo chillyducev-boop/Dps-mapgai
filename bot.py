@@ -4,10 +4,10 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, Cal
 from datetime import datetime, timedelta
 import json
 
-BOT_TOKEN = os.environ.get("BOT_TOKEN")
-PUBLISH_CHAT_ID = os.environ.get("PUBLISH_CHAT_ID")
-MIN_NO_TO_MARK_GONE = int(os.environ.get("MIN_NO_TO_MARK_GONE", 3))
-GONE_LIFETIME_MINUTES = int(os.environ.get("GONE_LIFETIME_MINUTES", 30))
+BOT_TOKEN = os.environ.get("8053650711:AAFWike1OZMFjtjMt-7LTWA13tdInUEmaAM")
+PUBLISH_CHAT_ID = os.environ.get("-1001867876887")
+MIN_NO_TO_MARK_GONE = int(os.environ.get("3")
+GONE_LIFETIME_MINUTES = int(os.environ.get("30")
 
 DATA_FILE = "points.json"
 
