@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>DPS Map</title>
+    <meta charset="utf-8">
+    <style>
+        html, body, #map {
+            height: 100%;
+            margin: 0;
+            padding: 0;
+        }
+    </style>
+    <script src="https://api-maps.yandex.ru/2.1/?apikey=74f5a636-ca5d-4776-b62e-0736a5f206d5&lang=ru_RU" type="text/javascript"></script>
+</head>
+<body>
+    <div id="map"></div>
+    <script>
+        ymaps.ready(init);
+        function init(){
+            var map = new ymaps.Map("map", {
+                center: [45.0, 42.0],
+                zoom: 10
+            });
+
+            var points = {{ points|tojson }};
+            points.forEach(function(p) {
+                var placemark = new ymaps.Placemark([p.lat, p.lon], {
+                    balloonContent: p.desc
+                });
+                map.geoObjects.add(placemark);
+            });
+        }
+    </script>
+</body>
+</html>
