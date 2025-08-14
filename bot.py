@@ -10,25 +10,27 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN")
 PUBLISH_CHAT_ID = os.environ.get("PUBLISH_CHAT_ID")
 MIN_NO_TO_MARK_GONE = int(os.environ.get("MIN_NO_TO_MARK_GONE"))
 GONE_LIFETIME_MINUTES = int(os.environ.get("GONE_LIFETIME_MINUTES"))
+YANDEX_API_KEY = os.environ.get("YANDEX_API_KEY")
 
 DATA_FILE = "points.json"
+OVERALL_MAP_LINK = "https://yandex.ru/maps/?source=constructor&some_map_id"  # вставьте свою общую карту
 
-# Загружаем существующие точки
+# Загружаем точки
 if os.path.exists(DATA_FILE):
     with open(DATA_FILE, "r") as f:
         points = json.load(f)
 else:
     points = []
 
-# Старт бота
+# /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[KeyboardButton("Отправить локацию"), KeyboardButton("Добавить адрес")]]
     await update.message.reply_text(
-        "Привет! Выберите способ добавления точки ДПС:",
+        "Привет! Выберите, как хотите добавить ДПС:",
         reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     )
 
-# Обработка автоматической геолокации
+# Автоматическая геолокация
 async def location_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_location = update.message.location
     description = update.message.caption or "ДПС"
@@ -54,10 +56,12 @@ async def location_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
          InlineKeyboardButton("❌ Уже нету", callback_data=f"no_{point_id}")]
     ]
 
-    map_link = f"https://yandex.ru/maps/?ll={user_location.longitude}%2C{user_location.latitude}&z=14"
+    # Ссылка на конкретную точку
+    point_map_link = f"https://yandex.ru/maps/?ll={user_location.longitude}%2C{user_location.latitude}&z=14"
+
     await context.bot.send_message(
         chat_id=PUBLISH_CHAT_ID,
-        text=f"🚓 {description}\n📍 {map_link}",
+        text=f"🚓 {description}\n📍 Точка: {point_map_link}\n🗺 Общая карта: {OVERALL_MAP_LINK}",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
     await update.message.reply_text("Точка добавлена!")
@@ -66,7 +70,7 @@ async def location_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def add_address_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Введите адрес:")
 
-# Обработка адреса
+# Обработчик ввода адреса
 async def address_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     address = update.message.text
     point_id = len(points) + 1
@@ -90,14 +94,12 @@ async def address_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
          InlineKeyboardButton("❌ Уже нету", callback_data=f"no_{point_id}")]
     ]
 
-    # Общая ссылка на карту с адресами всех точек
-    all_addresses = [urllib.parse.quote(p["address"]) for p in points if "address" in p]
-    map_text = "%0A".join(all_addresses)
-    map_link = f"https://yandex.ru/maps/?text={map_text}" if all_addresses else "Нет адресов"
+    # Ссылка на конкретную точку
+    point_map_link = f"https://yandex.ru/maps/?text={urllib.parse.quote(address)}"
 
     await context.bot.send_message(
         chat_id=PUBLISH_CHAT_ID,
-        text=f"🚓 {new_point['desc']}\n📍 {map_link}",
+        text=f"🚓 {new_point['desc']}\n📍 Точка: {point_map_link}\n🗺 Общая карта: {OVERALL_MAP_LINK}",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
     await update.message.reply_text("Точка добавлена по адресу!")
