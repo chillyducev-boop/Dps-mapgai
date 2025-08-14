@@ -1,104 +1,103 @@
 import os
 import json
 from datetime import datetime, timedelta
-import requests
+import urllib.parse
 from telegram import Update, KeyboardButton, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
-from dotenv import load_dotenv
 
-# Загружаем переменные окружения
-load_dotenv()
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-PUBLISH_CHAT_ID = os.getenv("PUBLISH_CHAT_ID")
-MIN_NO_TO_MARK_GONE = int(os.getenv("MIN_NO_TO_MARK_GONE", 3))
-GONE_LIFETIME_MINUTES = int(os.getenv("GONE_LIFETIME_MINUTES", 30))
-YANDEX_API_KEY = os.getenv("YANDEX_API_KEY")
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
+PUBLISH_CHAT_ID = os.environ.get("PUBLISH_CHAT_ID")
+MIN_NO_TO_MARK_GONE = int(os.environ.get("MIN_NO_TO_MARK_GONE"))
+GONE_LIFETIME_MINUTES = int(os.environ.get("GONE_LIFETIME_MINUTES"))
 
 DATA_FILE = "points.json"
 
-# Загружаем существующие точки
+# Загружаем точки
 if os.path.exists(DATA_FILE):
     with open(DATA_FILE, "r") as f:
         points = json.load(f)
 else:
     points = []
 
-# Генерация карты с метками
-def generate_map_url():
+# Формируем общую ссылку на карту с точками
+def generate_map_link():
     if not points:
-        return None
-    pt_list = "~".join([f"{p['lon']},{p['lat']},pm2rdm" for p in points])
-    return f"https://static-maps.yandex.ru/1.x/?apikey={YANDEX_API_KEY}&l=map&pt={pt_list}"
+        return "https://yandex.ru/maps"
+    base = "https://yandex.ru/maps/?rtext="
+    addresses = [urllib.parse.quote(point.get("address") or f"{point.get('lat','')},{point.get('lon','')}") for point in points]
+    return base + "~".join(addresses)
 
-# Команда /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        [KeyboardButton("Добавить адрес")]
-    ]
+    keyboard = [[KeyboardButton("Отправить локацию"), KeyboardButton("Добавить адрес")]]
     await update.message.reply_text(
-        "Привет! Отправьте адрес, где вы видели ДПС.",
+        "Привет! Выберите, как хотите добавить ДПС:",
         reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     )
 
-# Обработка ручного ввода адреса
+# Обработчик геолокации (автоматическая)
+async def location_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_location = update.message.location
+    description = update.message.caption or "ДПС"
+    point_id = len(points) + 1
+    expire_time = datetime.now() + timedelta(minutes=GONE_LIFETIME_MINUTES)
+
+    new_point = {
+        "id": point_id,
+        "desc": description,
+        "lat": user_location.latitude,
+        "lon": user_location.longitude,
+        "yes": 1,
+        "no": 0,
+        "expire": expire_time.isoformat()
+    }
+    points.append(new_point)
+    with open(DATA_FILE, "w") as f:
+        json.dump(points, f)
+
+    map_link = generate_map_link()
+    keyboard = [[InlineKeyboardButton("✅ Да, видел", callback_data=f"yes_{point_id}"),
+                 InlineKeyboardButton("❌ Уже нету", callback_data=f"no_{point_id}")]]
+    await context.bot.send_message(chat_id=PUBLISH_CHAT_ID,
+                                   text=f"🚓 {description}\n📍 {map_link}",
+                                   reply_markup=InlineKeyboardMarkup(keyboard))
+    await update.message.reply_text("Точка добавлена!")
+
+# Кнопка "Добавить адрес"
+async def add_address_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Введите адрес:")
+    context.user_data["awaiting_address"] = True
+
+# Обработчик текста (адрес)
 async def address_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Отправьте адрес ДПС (например, город, улица, дом).")
-    context.user_data["waiting_for_address"] = True
-
-# Обработка текста
-async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if context.user_data.get("waiting_for_address"):
+    if context.user_data.get("awaiting_address"):
         address = update.message.text
-        context.user_data["waiting_for_address"] = False
-
-        # Геокодинг через Яндекс
-        geocode_url = f"https://geocode-maps.yandex.ru/1.x/?apikey={YANDEX_API_KEY}&geocode={address}&format=json"
-        resp = requests.get(geocode_url).json()
-        try:
-            pos = resp["response"]["GeoObjectCollection"]["featureMember"][0]["GeoObject"]["Point"]["pos"]
-            lon, lat = map(float, pos.split())
-        except:
-            await update.message.reply_text("Не удалось определить координаты по адресу. Попробуйте другой адрес.")
-            return
-
-        # Создаём точку
         point_id = len(points) + 1
         expire_time = datetime.now() + timedelta(minutes=GONE_LIFETIME_MINUTES)
+
         new_point = {
             "id": point_id,
-            "lat": lat,
-            "lon": lon,
-            "desc": address,
+            "desc": "ДПС",
+            "address": address,
             "yes": 1,
             "no": 0,
             "expire": expire_time.isoformat()
         }
         points.append(new_point)
-
-        # Сохраняем
         with open(DATA_FILE, "w") as f:
             json.dump(points, f)
 
-        # Генерируем карту
-        map_url = generate_map_url()
+        map_link = generate_map_link()
+        keyboard = [[InlineKeyboardButton("✅ Да, видел", callback_data=f"yes_{point_id}"),
+                     InlineKeyboardButton("❌ Уже нету", callback_data=f"no_{point_id}")]]
+        await context.bot.send_message(chat_id=PUBLISH_CHAT_ID,
+                                       text=f"🚓 {new_point['desc']}\n📍 {map_link}",
+                                       reply_markup=InlineKeyboardMarkup(keyboard))
+        await update.message.reply_text("Точка добавлена по адресу!")
+        context.user_data["awaiting_address"] = False
+    else:
+        await update.message.reply_text("Используйте кнопки для добавления точки.")
 
-        keyboard = [
-            [InlineKeyboardButton("✅ Да, видел", callback_data=f"yes_{point_id}"),
-             InlineKeyboardButton("❌ Уже нету", callback_data=f"no_{point_id}")]
-        ]
-
-        text_msg = f"🚓 {address}\n📍 {lat}, {lon}"
-        if map_url:
-            text_msg += f"\n\nКарта: {map_url}"
-
-        await context.bot.send_message(
-            chat_id=PUBLISH_CHAT_ID,
-            text=text_msg,
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-        await update.message.reply_text("Точка добавлена!")
-
-# Голосование
+# Обработчик голосования
 async def vote_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -114,17 +113,16 @@ async def vote_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if point["no"] >= MIN_NO_TO_MARK_GONE:
                     points.remove(point)
             break
-
     with open(DATA_FILE, "w") as f:
         json.dump(points, f)
+    await query.edit_message_text(f"🚓 {point.get('desc','ДПС')}\n✅ {point['yes']}  ❌ {point['no']}")
 
-    await query.edit_message_text(f"🚓 {point['desc']}\n✅ {point['yes']}  ❌ {point['no']}")
-
-# Создаём и запускаем бота
+# Привязка обработчиков
 app = ApplicationBuilder().token(BOT_TOKEN).build()
 app.add_handler(CommandHandler("start", start))
-app.add_handler(MessageHandler(filters.Regex("Добавить адрес"), address_handler))
-app.add_handler(MessageHandler(filters.TEXT, text_handler))
+app.add_handler(MessageHandler(filters.LOCATION, location_handler))
+app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, address_handler))
+app.add_handler(MessageHandler(filters.Regex("Добавить адрес"), add_address_prompt))
 app.add_handler(CallbackQueryHandler(vote_handler))
 
 app.run_polling()
