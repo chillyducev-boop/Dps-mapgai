@@ -1,78 +1,106 @@
 import os
 import json
 from datetime import datetime, timedelta
-import requests
 from telegram import Update, KeyboardButton, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters, ConversationHandler
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
+from dotenv import load_dotenv
+import requests
 
-# --- Переменные окружения ---
+# Загружаем переменные окружения
+load_dotenv()
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
-PUBLISH_CHAT_ID = int(os.environ.get("PUBLISH_CHAT_ID", 0))
+PUBLISH_CHAT_ID = int(os.environ.get("PUBLISH_CHAT_ID"))
+MIN_NO_TO_MARK_GONE = int(os.environ.get("MIN_NO_TO_MARK_GONE"))
+GONE_LIFETIME_MINUTES = int(os.environ.get("GONE_LIFETIME_MINUTES"))
 YANDEX_API_KEY = os.environ.get("YANDEX_API_KEY")
-MIN_NO_TO_MARK_GONE = int(os.environ.get("MIN_NO_TO_MARK_GONE", 3))
-GONE_LIFETIME_MINUTES = int(os.environ.get("GONE_LIFETIME_MINUTES", 30))
 
 DATA_FILE = "points.json"
 
-# --- Загружаем точки ---
+# Загружаем существующие точки
 if os.path.exists(DATA_FILE):
     with open(DATA_FILE, "r") as f:
         points = json.load(f)
 else:
     points = []
 
-# --- Функции бота ---
+# Команда /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
-        [KeyboardButton("Отправить локацию", request_location=True)],
-        [KeyboardButton("Добавить вручную")]
+        [KeyboardButton("Добавить вручную")],
+        [KeyboardButton("Отправить текущую локацию", request_location=True)]
     ]
     await update.message.reply_text(
-        "Привет! Отправь мне точку, где ты видел ДПС, и описание.",
+        "Привет! Отправь мне точку ДПС:",
         reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     )
 
+# Обработчик локации
 async def location_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_location = update.message.location
     context.user_data["lat"] = user_location.latitude
     context.user_data["lon"] = user_location.longitude
     await update.message.reply_text("Теперь отправь описание или фото/видео.")
 
-async def media_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    lat = context.user_data.get("lat")
-    lon = context.user_data.get("lon")
-    if not lat or not lon:
-        await update.message.reply_text("Сначала отправь локацию.")
-        return
+# Обработчик ручного ввода (через текст)
+async def manual_add_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "Отправь описание точки ДПС и координаты через запятую (широта, долгота), например:\n"
+        "ДПС на трассе, 53.1959, 50.1008"
+    )
 
-    description = update.message.caption or update.message.text or "ДПС"
+# Обработчик сообщений с описанием/координатами
+async def media_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
+    if text.startswith("ДПС"):
+        try:
+            # Разбираем текст вручную
+            desc, lat, lon = map(str.strip, text.split(","))
+            lat = float(lat)
+            lon = float(lon)
+        except:
+            await update.message.reply_text("Ошибка формата. Пример: ДПС на трассе, 53.1959, 50.1008")
+            return
+    else:
+        lat = context.user_data.get("lat")
+        lon = context.user_data.get("lon")
+        desc = text
+        if not lat or not lon:
+            await update.message.reply_text("Сначала отправь локацию или используй ручное добавление.")
+            return
+
     point_id = len(points) + 1
     expire_time = datetime.now() + timedelta(minutes=GONE_LIFETIME_MINUTES)
     new_point = {
         "id": point_id,
         "lat": lat,
         "lon": lon,
-        "desc": description,
+        "desc": desc,
         "yes": 1,
         "no": 0,
         "expire": expire_time.isoformat()
     }
     points.append(new_point)
-    with open(DATA_FILE, "w") as f:
-        json.dump(points, f)
+
+    # Генерируем ссылку на Яндекс карты
+    map_url = f"https://yandex.ru/maps/?ll={lon}%2C{lat}&z=14&pt={lon}%2C{lat},pm2rdm"
 
     keyboard = [
         [InlineKeyboardButton("✅ Да, видел", callback_data=f"yes_{point_id}"),
-         InlineKeyboardButton("❌ Уже нету", callback_data=f"no_{point_id}")]
+         InlineKeyboardButton("❌ Уже нет", callback_data=f"no_{point_id}")]
     ]
 
     await context.bot.send_message(
         chat_id=PUBLISH_CHAT_ID,
-        text=f"🚓 {description}\n📍 {lat}, {lon}",
+        text=f"🚓 {desc}\n📍 {map_url}",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
     await update.message.reply_text("Точка добавлена!")
 
+    # Сохраняем данные
+    with open(DATA_FILE, "w") as f:
+        json.dump(points, f)
+
+# Голосование
 async def vote_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -94,63 +122,13 @@ async def vote_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await query.edit_message_text(f"🚓 {point['desc']}\n✅ {point['yes']}  ❌ {point['no']}")
 
-# --- Ручной ввод через Яндекс Геокодер ---
-MANUAL_INPUT = 1
-
-async def manual_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "Напиши адрес или описание точки, например: 'Самара, улица Ленина 50'."
-    )
-    return MANUAL_INPUT
-
-async def save_manual_point(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    address = update.message.text
-    url = f"https://geocode-maps.yandex.ru/1.x/?apikey={YANDEX_API_KEY}&geocode={address}&format=json"
-    response = requests.get(url).json()
-
-    try:
-        coords = response["response"]["GeoObjectCollection"]["featureMember"][0]["GeoObject"]["Point"]["pos"]
-        lon, lat = map(float, coords.split())
-    except (IndexError, KeyError):
-        await update.message.reply_text("Не удалось определить координаты. Попробуй другой адрес.")
-        return
-
-    description = address
-    point_id = len(points) + 1
-    expire_time = datetime.now() + timedelta(minutes=GONE_LIFETIME_MINUTES)
-    new_point = {
-        "id": point_id,
-        "lat": lat,
-        "lon": lon,
-        "desc": description,
-        "yes": 1,
-        "no": 0,
-        "expire": expire_time.isoformat()
-    }
-    points.append(new_point)
-    with open(DATA_FILE, "w") as f:
-        json.dump(points, f)
-
-    await context.bot.send_message(
-        chat_id=PUBLISH_CHAT_ID,
-        text=f"🚓 {description}\n📍 {lat}, {lon}"
-    )
-    await update.message.reply_text("Точка добавлена!")
-    return ConversationHandler.END
-
-# --- Создаем приложение ---
+# Создаем приложение
 app = ApplicationBuilder().token(BOT_TOKEN).build()
-
 app.add_handler(CommandHandler("start", start))
 app.add_handler(MessageHandler(filters.LOCATION, location_handler))
-app.add_handler(MessageHandler(filters.TEXT | filters.PHOTO | filters.VIDEO, media_handler))
+app.add_handler(MessageHandler(filters.Regex("Добавить вручную"), manual_add_handler))
+app.add_handler(MessageHandler(filters.TEXT, media_handler))
 app.add_handler(CallbackQueryHandler(vote_handler))
 
-manual_conv = ConversationHandler(
-    entry_points=[MessageHandler(filters.Regex("Добавить вручную"), manual_handler)],
-    states={MANUAL_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, save_manual_point)]},
-    fallbacks=[]
-)
-app.add_handler(manual_conv)
-
+# Запуск бота
 app.run_polling()
