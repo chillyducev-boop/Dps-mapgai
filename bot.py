@@ -5,12 +5,20 @@ import json
 from datetime import datetime, timedelta
 import urllib.parse
 
+# --------------------- Подключение .env ---------------------
+from dotenv import load_dotenv
+load_dotenv()  # Загружает переменные окружения из .env
+# ------------------------------------------------------------
+
 # Переменные окружения
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 PUBLISH_CHAT_ID = os.environ.get("PUBLISH_CHAT_ID")
 MIN_NO_TO_MARK_GONE = int(os.environ.get("MIN_NO_TO_MARK_GONE", 3))
 GONE_LIFETIME_MINUTES = int(os.environ.get("GONE_LIFETIME_MINUTES", 120))
-COMMON_MAP_LINK = "https://yandex.ru/maps/?um=constructor%3A8b6492d36113042cc1a1ab47cf0bd001486ca8187bb59c0aebc381e56a872997&source=constructorLink"
+COMMON_MAP_LINK = os.environ.get(
+    "COMMON_MAP_LINK",
+    "https://yandex.ru/maps/?um=constructor%3A8b6492d36113042cc1a1ab47cf0bd001486ca8187bb59c0aebc381e56a872997&source=constructorLink"
+)
 
 DATA_FILE = "points.json"
 
